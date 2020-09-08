@@ -1199,9 +1199,9 @@ def run_onnxruntime_tests(args, source_dir, ctest_path, build_dir, configs):
                     # set current size limit to 110KB
                     bin_size_threshold = 1100000
                     bin_actual_size = os.path.getsize(os.path.join(cwd, 'libonnxruntime.so'))
-                    log.info('Android libonnxruntime.so size [' + str(bin_actual_size) + 'B]')
+                    log.info('Android arm64 minsizerel libonnxruntime.so size [' + str(bin_actual_size) + 'B]')
                     if bin_actual_size > bin_size_threshold:
-                        raise BuildError('Android libonnxruntime.so size [' + str(bin_actual_size) +
+                        raise BuildError('Android arm64 minsizerel libonnxruntime.so size [' + str(bin_actual_size) +
                                          'B] is bigger than threshold [' + str(bin_size_threshold) + 'B]')
             continue
         dll_path_list = []

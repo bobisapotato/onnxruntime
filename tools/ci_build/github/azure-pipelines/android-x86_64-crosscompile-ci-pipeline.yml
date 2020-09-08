@@ -8,7 +8,7 @@ jobs:
       displayName: Install coreutils and ninja
 #    - script: tools/ci_build/build.py --android --build_dir build --android_sdk_path $ANDROID_HOME --android_ndk_path $ANDROID_HOME/ndk-bundle --android_abi=x86_64 --android_api=29 --skip_submodule_sync --parallel --use_nnapi --cmake_generator=Ninja
 #      displayName: Build and Test on Android Emulator
-    - script: pip install -U onnx
+    - script: pip3 install -U onnx
       displayName: Install onnx for minimal build
     - script: rm -rf build && mkdir -p $TMPDIR/include_ops && touch $TMPDIR/include_ops/include_non_ops.txt
       displayName: Clear the previous build and setup for arm64 minimal build
