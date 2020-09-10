@@ -5,13 +5,14 @@
 
 #include "core/framework/customregistry.h"
 #include "core/framework/execution_frame.h"
-#include "core/session/onnxruntime_c_api.h"
 #include "core/providers/dml/DmlExecutionProvider/inc/MLOperatorAuthor.h"
+#include "core/session/onnxruntime_c_api.h"
 
 #include "MLOperatorAuthorImpl.h"
 #include "core/providers/dml/OperatorAuthorHelper/MLOperatorAuthorPrivate.h"
 
 using namespace Microsoft::WRL;
+using namespace ::onnxruntime::common;
 
 namespace Windows::AI::MachineLearning::Adapter
 {
@@ -92,8 +93,8 @@ bool IsAllocationInterface(const ::OrtMemoryInfo& info) {
 // the ABI. The translation is determined by the provider and based on options with which the
 // kernels are registered.
 void TranslateAllocationDataToAbi(
-    IWinmlExecutionProvider* winmlProvider, 
-    bool isInternalOperator, 
+    IWinmlExecutionProvider* winmlProvider,
+    bool isInternalOperator,
     const ::OrtMemoryInfo& allocInfo,
     IUnknown* allocation,
     IUnknown** abiAllocation) {
@@ -1676,18 +1677,18 @@ EdgeShapes AbiOpKernel::GetInputShapes(onnxruntime::OpKernelContext* context) co
 
 void AbiOpKernel::InferAndVerifyOutputSizes(
     gsl::span<const uint32_t> requiredConstantCpuInputs,
-    MLOperatorTensorGetter& constantInputGetter, 
-    const EdgeShapes* inputShapes, 
+    MLOperatorTensorGetter& constantInputGetter,
+    const EdgeShapes* inputShapes,
     EdgeShapes& outputShapes) const
 {
     // call the non member function (below)
     Windows::AI::MachineLearning::Adapter::InferAndVerifyOutputSizes(
         Node(),
-        m_defaultAttributes, 
-        m_shapeInferrer.Get(), 
+        m_defaultAttributes,
+        m_shapeInferrer.Get(),
         requiredConstantCpuInputs,
         constantInputGetter,
-        inputShapes, 
+        inputShapes,
         outputShapes
     );
 }
@@ -1807,7 +1808,7 @@ CATCH_RETURN();
 
 MLSupportQueryContext::MLSupportQueryContext(
         onnxruntime::OpNodeProtoHelper<onnxruntime::ProtoHelperNodeContext>* info,
-        const AttributeMap* defaultAttributes) : 
+        const AttributeMap* defaultAttributes) :
     OpNodeInfoWrapper(info, nullptr, defaultAttributes, gsl::span<const uint32_t>(), MLOperatorTensorGetter())
 {
 }
