@@ -35,7 +35,7 @@ class QLinearActivation(QuantOperatorBase):
             super().quantize()
             return
 
-        (quantized_input_names, zero_point_names, scale_names, nodes) = self.quantizer._quantize_inputs(node, [0])
+        quantized_input_names, zero_point_names, scale_names, nodes = self.quantizer._quantize_inputs(node, [0])
 
         qlinear_activation_output = node.output[0] + "_quantized"
         qlinear_activation_name = ""
@@ -46,15 +46,7 @@ class QLinearActivation(QuantOperatorBase):
             kwargs.update(_attribute_to_kwarg(attribute))
         kwargs["domain"] = ms_domain
 
-        qlinear_activation_inputs = []
-        # Input 0
-        qlinear_activation_inputs.append(quantized_input_names[0])
-        qlinear_activation_inputs.append(scale_names[0])
-        qlinear_activation_inputs.append(zero_point_names[0])
-
-        # Output
-        qlinear_activation_inputs.append(output_scale_name)
-        qlinear_activation_inputs.append(output_zp_name)
+        qlinear_activation_inputs = [quantized_input_names[0], scale_names[0], zero_point_names[0], output_scale_name, output_zp_name]
 
         qlinear_activation_node = onnx.helper.make_node(
             "QLinear" + node.op_type, qlinear_activation_inputs,
