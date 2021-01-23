@@ -7,6 +7,7 @@
 #include "core/optimizer/utils.h"
 #include "core/framework/tensorprotoutils.h"
 #include "float.h"
+#include "core/common/safeint.h"
 
 #define DEBUG_LOG(x) LOGS(logger, VERBOSE) << x
 
@@ -65,18 +66,6 @@ static bool CheckInput(NodeArg* input, const logging::Logger& logger) {
   return true;
 }
 
-static void AddNodes(std::vector<NodeIndex>& node_indices,
-                     const std::vector<const Node::EdgeEnd*>& edges) {
-  for (size_t i = 0; i < edges.size(); i++) {
-    auto item = edges[i]->GetNode().Index();
-    // Avoid duplication.
-    if (std::find(node_indices.begin(), node_indices.end(), item) != node_indices.end()) {
-      continue;
-    }
-    node_indices.push_back(item);
-  }
-}
-
 static bool IsNeighborNodeExpectedTypes(Node::NodeConstIterator start, const Node::NodeConstIterator end, const std::vector<std::string>& expected_types) {
   for (const std::string& expected_type : expected_types) {
     if (start == end || (*start).OpType().compare(expected_type) != 0) {
@@ -121,9 +110,7 @@ static bool MatchInputToConcatSubgraph(
     const NodeArg* input_ids,
     const int index,
     const logging::Logger& logger,
-    std::vector<NodeIndex>& subgraph_node_indices,
     const NodeIndex expected_gather_node_1_index) {
-  subgraph_node_indices.clear();
   std::vector<graph_utils::EdgeEndToMatch> expand_parent_path1{
       {0, index, "Concat", {4, 11}, kOnnxDomain},
       {0, 0, "Unsqueeze", {1, 11}, kOnnxDomain},
@@ -156,8 +143,6 @@ static bool MatchInputToConcatSubgraph(
     DEBUG_LOG("Second input of Gather in path 1 of position shape should be a constant with value 0.");
     return false;
   }
-
-  AddNodes(subgraph_node_indices, edges);
 
   std::vector<graph_utils::EdgeEndToMatch> concat_parent_path{
       {0, 1, "Unsqueeze", {1, 11}, kOnnxDomain},
@@ -211,7 +196,6 @@ static bool MatchInputToConcatSubgraph(
     }
   }
 
-  AddNodes(subgraph_node_indices, edges);
   return true;
 }
 
@@ -238,9 +222,7 @@ static bool MatchPositionEmbeddingSubgraphsFromGather(
     Graph& graph,
     const Node& position_gather_node,
     const NodeArg* input_ids,
-    const logging::Logger& logger,
-    std::vector<NodeIndex>& subgraph_node_indices) {
-  subgraph_node_indices.clear();
+    const logging::Logger& logger) {
   std::vector<const Node::EdgeEnd*> pg_edges;
   // Look for Path 1:
   // Shape --> Gather --> Unsqueeze --> ConstantOfShape --> NonZero --> Transpose --> Squeeze
@@ -348,8 +330,6 @@ static bool MatchPositionEmbeddingSubgraphsFromGather(
       DEBUG_LOG("The parent of shape nodes are expected to be input_ids.");
       return false;
     }
-
-    subgraph_node_indices.push_back(shape_node_index);
   } else {  // gather_output_edges_count == 2
     // Match optional Reshape -> Equal -> Where -> Expand
     //                  |                  |
@@ -373,19 +353,16 @@ static bool MatchPositionEmbeddingSubgraphsFromGather(
         return false;
       }
       // Match [input_ids] -> Gather -> Shape -> Unsqueeze from Reshape node.
-      if (!MatchInputToConcatSubgraph(graph, reshape_node, input_ids, 0, logger, subgraph_node_indices, gather_node.Index())) {
+      if (!MatchInputToConcatSubgraph(graph, reshape_node, input_ids, 0, logger, gather_node.Index())) {
         DEBUG_LOG("Failed to match position subgraph.");
         return false;
       }
-      AddNodes(subgraph_node_indices, pg_edges_2);
-    } else if (!MatchInputToConcatSubgraph(graph, expand_node, input_ids, 1, logger, subgraph_node_indices, gather_node.Index())) {
+    } else if (!MatchInputToConcatSubgraph(graph, expand_node, input_ids, 1, logger, gather_node.Index())) {
       // Match [input_ids] -> Gather -> Shape -> Unsqueeze from Expand node.
       DEBUG_LOG("Failed to match position subgraph.");
       return false;
     }
   }
-
-  AddNodes(subgraph_node_indices, pg_edges);
 
   return true;
 }
@@ -438,11 +415,12 @@ static bool MatchPositionEmbeddingSubgraph(
       }
     }
   } else {
-    if (!MatchPositionEmbeddingSubgraphsFromGather(graph, position_gather_node, input_ids, logger, subgraph_node_indices)) {
+    if (!MatchPositionEmbeddingSubgraphsFromGather(graph, position_gather_node, input_ids, logger)) {
       return false;
     }
   }
 
+  subgraph_node_indices.clear();
   subgraph_node_indices.push_back(position_gather_node.Index());
   return true;
 }
@@ -450,8 +428,8 @@ static bool MatchPositionEmbeddingSubgraph(
 template <typename T>
 bool CheckEmbeddingData(const T* data, int64_t batch_size, int64_t element_count) {
   // check that all batches has same data.
-  size_t data_length = batch_size * element_count;
-  for (size_t i = element_count; i < data_length; i++) {
+  size_t data_length = SafeInt<size_t>(batch_size) * element_count;
+  for (size_t i = gsl::narrow<size_t>(element_count); i < data_length; i++) {
     if (data[i] != data[i % element_count]) {
       return false;
     }
@@ -486,14 +464,14 @@ static NodeArg* ExtractEmbedding(Graph& graph,
       return nullptr;
     }
 
-    initializer.set_raw_data(data, element_count * sizeof(float));
+    initializer.set_raw_data(data, gsl::narrow<size_t>(element_count) * sizeof(float));
   } else {  // data_type == ONNX_NAMESPACE::TensorProto_DataType_FLOAT16
     const MLFloat16* data = old_initializer.data<MLFloat16>();
     if (!CheckEmbeddingData(data, batch_size, element_count)) {
       return nullptr;
     }
 
-    initializer.set_raw_data(data, element_count * sizeof(MLFloat16));
+    initializer.set_raw_data(data, gsl::narrow<size_t>(element_count) * sizeof(MLFloat16));
   }
 
   NodeArg& node_arg = graph_utils::AddInitializer(graph, initializer);
@@ -507,7 +485,6 @@ static void CreateEmbedLayernormNode(Graph& graph,
                                      NodeArg* word_embedding,
                                      NodeArg* position_embedding,
                                      NodeArg* segment_embedding,
-
                                      Node& layer_norm_node) {
   // Cast input_ids and segment_ids to int32 if needed.
   input_ids = CastToInt32(graph, input_ids, layer_norm_node.GetExecutionProviderType());
@@ -528,7 +505,6 @@ static void CreateEmbedLayernormNode(Graph& graph,
       position_embedding,
       segment_embedding,
       layer_norm_node.MutableInputDefs()[1],
-
       layer_norm_node.MutableInputDefs()[2]};
 
   auto& mask_index = graph.GetOrCreateNodeArg(graph.GenerateNodeArgName("mask_index"), nullptr);
@@ -705,6 +681,12 @@ static bool FuseSubGraph(Graph& graph,
   CreateEmbedLayernormNode(graph, input_ids, segment_ids, word_embedding, position_embedding, segment_embedding,
                            layer_norm_node);
 
+  if (!nodes_to_remove.empty()) {
+    graph_utils::RemoveNodesWithOneOutputBottomUp(graph, *graph.GetNode(nodes_to_remove[0]));
+  }
+
+  nodes_to_remove.clear();
+
   nodes_to_remove.push_back(word_gather_node.Index());
   nodes_to_remove.push_back(segment_gather_node.Index());
   nodes_to_remove.push_back(add_node.Index());
@@ -712,7 +694,7 @@ static bool FuseSubGraph(Graph& graph,
   nodes_to_remove.push_back(layer_norm_add_node.Index());
   nodes_to_remove.push_back(layer_norm_node.Index());
 
-  for (const auto& index : nodes_to_remove) {
+  for (const NodeIndex index : nodes_to_remove) {
     Node* node = graph.GetNode(index);
     graph_utils::RemoveNodeOutputEdges(graph, *node);
     graph.RemoveNode(node->Index());
@@ -725,7 +707,6 @@ static bool FuseSubGraph(Graph& graph,
 static bool FuseSubGraphDistilBert(Graph& graph,
                                    Node& layer_norm_add_node,
                                    Node& layer_norm_node,
-
                                    const logging::Logger& logger) {
   std::vector<graph_utils::EdgeEndToMatch> word_embedding_path{
       {0, 0, "Gather", {1, 11, 13}, kOnnxDomain}};
@@ -796,12 +777,18 @@ static bool FuseSubGraphDistilBert(Graph& graph,
   CreateEmbedLayernormNode(graph, input_ids, nullptr, word_embedding, position_embedding, nullptr,
                            layer_norm_node);
 
+  if (!nodes_to_remove.empty()) {
+    graph_utils::RemoveNodesWithOneOutputBottomUp(graph, *graph.GetNode(nodes_to_remove[0]));
+  }
+
+  nodes_to_remove.clear();
+
   nodes_to_remove.push_back(word_gather_node.Index());
   nodes_to_remove.push_back(add_node.Index());
 
   nodes_to_remove.push_back(layer_norm_node.Index());
 
-  for (const auto& index : nodes_to_remove) {
+  for (const NodeIndex index : nodes_to_remove) {
     Node* node = graph.GetNode(index);
     graph_utils::RemoveNodeOutputEdges(graph, *node);
     graph.RemoveNode(node->Index());

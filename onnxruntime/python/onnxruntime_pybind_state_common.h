@@ -11,9 +11,6 @@
 namespace onnxruntime {
 namespace python {
 
-using namespace onnxruntime;
-using namespace onnxruntime::logging;
-
 #if !defined(ORT_MINIMAL_BUILD)
 struct CustomOpLibrary {
   CustomOpLibrary(const char* library_path, OrtSessionOptions& ort_so);
@@ -64,7 +61,7 @@ struct PyInferenceSession {
 
   void AddCustomOpLibraries(const std::vector<std::shared_ptr<CustomOpLibrary>>& custom_op_libraries) {
     if (!custom_op_libraries.empty()) {
-      custom_op_libraries_.reserve(custom_op_libraries_.size() + custom_op_libraries.size());
+      custom_op_libraries_.reserve(custom_op_libraries.size());
       for (size_t i = 0; i < custom_op_libraries.size(); ++i) {
         custom_op_libraries_.push_back(custom_op_libraries[i]);
       }
@@ -82,9 +79,9 @@ struct PyInferenceSession {
   }
 
  private:
- #if !defined(ORT_MINIMAL_BUILD)
+#if !defined(ORT_MINIMAL_BUILD)
   // Hold CustomOpLibrary resources so as to tie it to the life cycle of the InferenceSession needing it.
-  // NOTE: Declare this above `sess_` so that this is destructed AFTER the InferenceSession instance -
+  // NOTE: Define this above `sess_` so that this is destructed AFTER the InferenceSession instance -
   // this is so that the custom ops held by the InferenceSession gets destroyed prior to the library getting unloaded
   // (if ref count of the shared_ptr reaches 0)
   std::vector<std::shared_ptr<CustomOpLibrary>> custom_op_libraries_;
@@ -131,6 +128,9 @@ Environment& GetEnv();
 void InitializeSession(InferenceSession* sess,
                        const std::vector<std::string>& provider_types = {},
                        const ProviderOptionsVector& provider_options = {});
+
+// Checks if PyErrOccured, fetches status and throws.
+void ThrowIfPyErrOccured();
 
 }  // namespace python
 }  // namespace onnxruntime

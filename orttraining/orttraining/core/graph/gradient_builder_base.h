@@ -5,6 +5,7 @@
 
 #include <vector>
 #include <string>
+#include "core/util/math.h"
 #include "core/graph/graph.h"
 #include "orttraining/core/graph/graph_augmenter.h"
 #include "orttraining/core/graph/gradient_config.h"
@@ -21,7 +22,8 @@ void ComputeBroadcastBackwardAxes(
     const std::vector<Dimension>& A_dims,
     const std::vector<Dimension>& B_dims,
     std::vector<int64_t>* A_axes,
-    std::vector<int64_t>* B_axes);
+    std::vector<int64_t>* B_axes,
+    const std::string& node_name = "");
 
 void ComputeBroadcastBackwardAxesDynamic(const ArgDef& a,
                                          const ArgDef& b,
@@ -94,6 +96,15 @@ class GradientBuilderBase {
   // i-th output of forward op
   ArgDef O(const size_t i) const {
     ORT_ENFORCE(i < node_->OutputDefs().size());
+
+    const std::string& name = node_->OutputDefs()[i]->Name();
+    const NodeArg* recomputed_nodearg = graph_->GetNodeArg(graph_utils::RecomputeName(name));
+    if (recomputed_nodearg) {
+      const Node* producer_node = graph_->GetProducerNode(name);
+      LOGS(logger_, INFO) << "Recomputed node arg found for " << producer_node->Name();
+      return ArgDef(recomputed_nodearg->Name(), recomputed_nodearg->TypeAsProto());
+    }
+
     return ArgDef(node_->OutputDefs()[i]->Name(), node_->OutputDefs()[i]->TypeAsProto());
   }
 
@@ -124,6 +135,16 @@ class GradientBuilderBase {
   const TypeProto* OType(const size_t i) const {
     ORT_ENFORCE(i < node_->OutputDefs().size());
     return node_->OutputDefs()[i]->TypeAsProto();
+  }
+
+  // Element type of i-th input of forward op.
+  int IElemType(const size_t i) const {
+    return IType(i)->tensor_type().elem_type();
+  }
+
+  // Element type of i-th output of forward op.
+  int OElemType(const size_t i) const {
+    return OType(i)->tensor_type().elem_type();
   }
 
   int GetSrcNodeInputSize() const {
@@ -160,6 +181,19 @@ class GradientBuilderBase {
     return node_->OpType();
   }
 
+  int SrcNodeOpsetVersion() const {
+    return node_->Op()->since_version();
+  }
+
+  const std::string& SrcNodeDomain() const {
+    return node_->Op()->domain();
+  }
+
+  int OnnxOpSetVersion() const {
+    return graph_ != nullptr && graph_->DomainToVersionMap().find(kOnnxDomain) != graph_->DomainToVersionMap().end() ?
+               graph_->DomainToVersionMap().at(kOnnxDomain) : -1;
+  }
+
   template <typename T>
   static NodeDef ConstantVectorNode(const std::vector<T>& values, const std::string& arg_name) {
     auto t_proto = ONNX_NAMESPACE::ToTensor<T>(values);
@@ -186,13 +220,36 @@ class GradientBuilderBase {
                    {ONNX_NAMESPACE::MakeAttribute("value", t_proto)});
   }
 
-  static NodeDef ZeroConstantNode() {
-    return ConstantScalarNode(0.0f, {1}, "ZeroConstant");
+  // We only support FP32, FP16 and BF16 for these constant nodes for now.
+  static NodeDef ConstantScalarNode(float value, const std::string& arg_name, int elem_type) {
+    if (elem_type == ONNX_NAMESPACE::TensorProto_DataType_FLOAT16) {
+      return ConstantScalarNode(MLFloat16(math::floatToHalf(value)), {1}, arg_name);
+    }
+
+    if (elem_type == ONNX_NAMESPACE::TensorProto_DataType_BFLOAT16) {
+      return ConstantScalarNode(BFloat16(value), {1}, arg_name);
+    }
+
+    return ConstantScalarNode(value, {1}, arg_name);
   }
 
-  static NodeDef OneConstantNode() {
-    return ConstantScalarNode(1.0f, {1}, "OneConstant");
+  static NodeDef ZeroConstantNode(int elem_type) {
+    return ConstantScalarNode(0.0f, "ZeroConstant_Type" + std::to_string(elem_type), elem_type);
   }
+
+  static NodeDef HalfConstantNode(int elem_type) {
+    return ConstantScalarNode(0.5f, "HalfConstant_Type" + std::to_string(elem_type), elem_type);
+  }
+
+  static NodeDef OneConstantNode(int elem_type) {
+    return ConstantScalarNode(1.0f, "OneConstant_Type" + std::to_string(elem_type), elem_type);
+  }
+
+  void AddReduceSumNode(const ArgDef& input_arg_def,
+                        const ArgDef& output_arg_def,
+                        const std::vector<int64_t>& reduce_axes,
+                        bool keep_dims,
+                        std::vector<NodeDef>& output) const;
 
   void HandleBroadcasting(const ArgDef& input_grad,
                           const ArgDef& target,
@@ -206,6 +263,15 @@ class GradientBuilderBase {
                                  const ArgDef& output_grad,
                                  const ArgDef& reduce_axes,
                                  std::vector<NodeDef>& output) const;
+
+  std::vector<NodeDef> GetBiasGeluGradNodes(
+    bool use_approximation,
+    const ArgDef& dY, const ArgDef& X, const ArgDef& B,  // inputs
+    const ArgDef& dX, const ArgDef& dB,                  // outputs
+    const ArgDef& b_axes, const ArgDef& b_shape, const ArgDef& x_shape,  //intermediate args
+    const std::string& node_name) const;
+
+  const std::string& NodeName() const { return node_->Name(); }
 
  private:
   friend class GradientGraphBuilder;

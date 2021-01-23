@@ -12,6 +12,7 @@ import random
 import numpy
 import time
 import re
+from pathlib import Path
 from typing import List, Dict, Tuple, Union
 from transformers import GPT2Model, GPT2LMHeadModel, GPT2Config
 from benchmark_helper import Precision
@@ -40,7 +41,10 @@ class MyGPT2Model(GPT2Model):
         super().__init__(config)
 
     def forward(self, input_ids, position_ids, attention_mask, *past):
-        return super().forward(input_ids, position_ids=position_ids, attention_mask=attention_mask, past=past)
+        return super().forward(input_ids,
+                               position_ids=position_ids,
+                               attention_mask=attention_mask,
+                               past_key_values=past)
 
 
 class MyGPT2LMHeadModel(GPT2LMHeadModel):
@@ -50,7 +54,10 @@ class MyGPT2LMHeadModel(GPT2LMHeadModel):
         super().__init__(config)
 
     def forward(self, input_ids, position_ids, attention_mask, *past):
-        return super().forward(input_ids, position_ids=position_ids, attention_mask=attention_mask, past=past)
+        return super().forward(input_ids,
+                               position_ids=position_ids,
+                               attention_mask=attention_mask,
+                               past_key_values=past)
 
 
 class MyGPT2LMHeadModel_NoPadding(GPT2LMHeadModel):
@@ -62,7 +69,7 @@ class MyGPT2LMHeadModel_NoPadding(GPT2LMHeadModel):
         super().__init__(config)
 
     def forward(self, input_ids, *past):
-        return super().forward(input_ids, past=past)
+        return super().forward(input_ids, past_key_values=past)
 
 
 # Maps model class name to a tuple of model class, name of first output and use padding or not
@@ -285,6 +292,8 @@ class Gpt2Helper:
             f"Shapes: input_ids={dummy_inputs.input_ids.shape} past={dummy_inputs.past[0].shape} output={outputs[0].shape} present={outputs[1][0].shape}"
         )
 
+        Path(onnx_model_path).parent.mkdir(parents=True, exist_ok=True)
+
         torch.onnx.export(model,
                           args=tuple(input_list),
                           f=onnx_model_path,
@@ -398,8 +407,14 @@ class Gpt2Helper:
         if past is not None:
             for i, past_i in enumerate(past):
                 assert past_i.is_contiguous()
-                io_binding.bind_input(f'past_{i}', past_i.device.type, 0, float_type, list(past_i.size()),
-                                      past_i.data_ptr())
+
+                data_ptr = past_i.data_ptr()
+                if data_ptr == 0:
+                    # When past_sequence_length is 0, its data_ptr will be zero. IO Binding asserts that data_ptr shall not be zero.
+                    # Here we workaround and pass data pointer of input_ids. Actual data is not used for past so it does not matter.
+                    data_ptr = input_ids.data_ptr()
+
+                io_binding.bind_input(f'past_{i}', past_i.device.type, 0, float_type, list(past_i.size()), data_ptr)
 
         if attention_mask is not None:
             assert attention_mask.is_contiguous()
@@ -565,9 +580,8 @@ class Gpt2Helper:
         """ Build a  path name for given model based on given attributes.
         """
         model_name = model_name_or_path
-        if not re.match('^[\w_-]+$', model_name_or_path):  # It is not a name, shall be a path
+        if not re.match(r'^[\w_-]+$', model_name_or_path):  # It is not a name, shall be a path
             assert os.path.isdir(model_name_or_path)
-            from pathlib import Path
             model_name = Path(model_name_or_path).parts[-1]
 
         if model_class != 'GPT2LMHeadModel':
@@ -577,9 +591,13 @@ class Gpt2Helper:
             model_name += "_past"
 
         if new_folder:
-            output_dir = os.path.join(output_dir, model_name)
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
+            # store each model to its own directory (for external data format).
+            return {
+                "raw": os.path.join(os.path.join(output_dir, model_name), model_name + ".onnx"),
+                "fp32": os.path.join(os.path.join(output_dir, model_name + "_fp32"), model_name + "_fp32.onnx"),
+                "fp16": os.path.join(os.path.join(output_dir, model_name + "_fp16"), model_name + "_fp16.onnx"),
+                "int8": os.path.join(os.path.join(output_dir, model_name + "_int8"), model_name + "_int8.onnx")
+            }
 
         return {
             "raw": os.path.join(output_dir, model_name + ".onnx"),

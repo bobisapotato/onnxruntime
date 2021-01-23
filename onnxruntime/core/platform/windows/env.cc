@@ -118,12 +118,6 @@ class WindowsEnv : public Env {
                           Eigen::ThreadPoolInterface* param, const ThreadOptions& thread_options) {
     return new WindowsThread(name_prefix, index, start_address, param, thread_options);
   }
-  Task CreateTask(std::function<void()> f) {
-    return Task{std::move(f)};
-  }
-  void ExecuteTask(const Task& t) {
-    t.f();
-  }
 
   void SleepForMicroseconds(int64_t micros) const override {
     Sleep(static_cast<DWORD>(micros) / 1000);
@@ -195,6 +189,10 @@ class WindowsEnv : public Env {
     wil::unique_hfile file_handle{
         CreateFileW(file_path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)};
 #endif
+    if (file_handle.get() == INVALID_HANDLE_VALUE) {
+      const int err = GetLastError();
+      return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "open file ", ToMBString(file_path), " fail, errcode = ", err);
+    }
     LARGE_INTEGER filesize;
     if (!GetFileSizeEx(file_handle.get(), &filesize)) {
       const int err = GetLastError();

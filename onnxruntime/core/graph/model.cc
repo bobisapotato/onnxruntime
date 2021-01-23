@@ -1,12 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "core/framework/tensorprotoutils.h"
-#include "core/graph/graph_flatbuffers_utils.h"
-#include "core/graph/model.h"
-#include "core/graph/model_load_utils.h"
 #include <memory>
 #include "core/common/logging/logging.h"
+#include "core/flatbuffers/schema/ort.fbs.h"
+#include "core/flatbuffers/flatbuffers_utils.h"
+#include "core/framework/tensorprotoutils.h"
+#include "core/graph/model.h"
+#include "core/graph/model_load_utils.h"
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -180,24 +181,33 @@ Version Model::IrVersion() const {
   return kNoVersion;
 }
 
-const std::string& Model::ProducerName() const {
-  return model_proto_.producer_name();
+const std::string Model::ProducerName() const {
+  if (model_proto_.has_producer_name()) {
+    return model_proto_.producer_name();
+  }
+  return std::string();
 }
 
 void Model::SetProducerName(const std::string& producer_name) {
   model_proto_.set_producer_name(producer_name);
 }
 
-const std::string& Model::ProducerVersion() const {
-  return model_proto_.producer_version();
+const std::string Model::ProducerVersion() const {
+  if (model_proto_.has_producer_version()) {
+    return model_proto_.producer_version();
+  }
+  return std::string();
 }
 
 void Model::SetProducerVersion(const std::string& producer_version) {
   model_proto_.set_producer_version(producer_version);
 }
 
-const std::string& Model::Domain() const {
-  return model_proto_.domain();
+const std::string Model::Domain() const {
+  if (model_proto_.has_domain()) {
+    return model_proto_.domain();
+  }
+  return std::string();
 }
 
 void Model::SetDomain(const std::string& domain) {
@@ -215,12 +225,22 @@ void Model::SetModelVersion(onnxruntime::Version version) {
   model_proto_.set_model_version(version);
 }
 
-const std::string& Model::DocString() const {
-  return model_proto_.doc_string();
+const std::string Model::DocString() const {
+  if (model_proto_.has_doc_string()) {
+    return model_proto_.doc_string();
+  }
+  return std::string();
 }
 
 void Model::SetDocString(const std::string& doc_string) {
   model_proto_.set_doc_string(doc_string);
+}
+
+const std::string Model::GraphDocString() const {
+  if (model_proto_.has_graph() && model_proto_.graph().has_doc_string()) {
+    return model_proto_.graph().doc_string();
+  }
+  return std::string();
 }
 
 #endif  // !defined(ORT_MINIMAL_BUILD)
@@ -239,8 +259,15 @@ const Graph& Model::MainGraph() const noexcept {
 
 #if !defined(ORT_MINIMAL_BUILD)
 ModelProto Model::ToProto() {
-  *(model_proto_.mutable_graph()) = graph_->ToGraphProto();
-  return model_proto_;
+  // We want to return back the original proto
+  // To that end invoke const overload of ToGraphProto()
+  // that returns by value and, therefore, allows us to filter
+  // out dense duplicates of sparse initializers and leave the original
+  // proto intact.
+  ModelProto result(model_proto_);
+  const auto& graph = *graph_;
+  *(result.mutable_graph()) = graph.ToGraphProto();
+  return result;
 }
 
 Status Model::Load(std::istream& model_istream, ModelProto* p_model_proto) {
@@ -543,10 +570,15 @@ Status Model::Save(Model& model, int p_fd) {
 
 common::Status Model::SaveToOrtFormat(flatbuffers::FlatBufferBuilder& builder,
                                       flatbuffers::Offset<fbs::Model>& fbs_model) const {
-  auto producer_name = builder.CreateString(model_proto_.producer_name());
-  auto producer_version = builder.CreateString(model_proto_.producer_version());
-  auto domain = builder.CreateString(model_proto_.domain());
-  auto doc_string = builder.CreateString(model_proto_.doc_string());
+  auto producer_name = experimental::utils::SaveStringToOrtFormat(
+      builder, model_proto_.has_producer_name(), model_proto_.producer_name());
+  auto producer_version = experimental::utils::SaveStringToOrtFormat(
+      builder, model_proto_.has_producer_version(), model_proto_.producer_version());
+  auto domain = builder.CreateSharedString(model_proto_.domain());
+  auto doc_string = experimental::utils::SaveStringToOrtFormat(
+      builder, model_proto_.has_doc_string(), model_proto_.doc_string());
+  auto graph_doc_string = experimental::utils::SaveStringToOrtFormat(
+      builder, model_proto_.has_graph() && model_proto_.graph().has_doc_string(), model_proto_.graph().doc_string());
 
   std::vector<flatbuffers::Offset<fbs::OperatorSetId>> op_set_ids_vec;
   op_set_ids_vec.reserve(model_proto_.opset_import().size());
@@ -570,6 +602,7 @@ common::Status Model::SaveToOrtFormat(flatbuffers::FlatBufferBuilder& builder,
   mb.add_domain(domain);
   mb.add_model_version(model_proto_.model_version());
   mb.add_doc_string(doc_string);
+  mb.add_graph_doc_string(graph_doc_string);
   mb.add_graph(fbs_graph);
 
   // add graph
@@ -583,16 +616,20 @@ common::Status Model::SaveToOrtFormat(flatbuffers::FlatBufferBuilder& builder,
 Model::Model() : model_path_{} {
 }
 
+#if defined(ENABLE_ORT_FORMAT_LOAD)
 common::Status Model::LoadFromOrtFormat(const fbs::Model& fbs_model,
                                         const logging::Logger& logger,
                                         std::unique_ptr<Model>& model) {
   model.reset(new Model());
 
 #if !defined(ORT_MINIMAL_BUILD)
-  experimental::utils::LoadStringFromOrtFormat(*model->model_proto_.mutable_producer_name(), fbs_model.producer_name());
-  experimental::utils::LoadStringFromOrtFormat(*model->model_proto_.mutable_producer_version(), fbs_model.producer_version());
-  experimental::utils::LoadStringFromOrtFormat(*model->model_proto_.mutable_domain(), fbs_model.domain());
-  experimental::utils::LoadStringFromOrtFormat(*model->model_proto_.mutable_doc_string(), fbs_model.doc_string());
+  LOAD_STR_FROM_ORT_FORMAT(model->model_proto_, producer_name, fbs_model.producer_name());
+  LOAD_STR_FROM_ORT_FORMAT(model->model_proto_, producer_version, fbs_model.producer_version());
+  LOAD_STR_FROM_ORT_FORMAT(model->model_proto_, domain, fbs_model.domain());
+  LOAD_STR_FROM_ORT_FORMAT(model->model_proto_, doc_string, fbs_model.doc_string());
+  if (fbs_model.graph_doc_string()) {
+    model->model_proto_.mutable_graph()->set_doc_string(fbs_model.graph_doc_string()->c_str());
+  }
   model->model_proto_.set_model_version(fbs_model.model_version());
   model->model_proto_.set_ir_version(fbs_model.ir_version());
 #else
@@ -600,27 +637,13 @@ common::Status Model::LoadFromOrtFormat(const fbs::Model& fbs_model,
   experimental::utils::LoadStringFromOrtFormat(model->producer_version_, fbs_model.producer_version());
   experimental::utils::LoadStringFromOrtFormat(model->domain_, fbs_model.domain());
   experimental::utils::LoadStringFromOrtFormat(model->doc_string_, fbs_model.doc_string());
+  experimental::utils::LoadStringFromOrtFormat(model->graph_doc_string_, fbs_model.graph_doc_string());
   model->model_version_ = fbs_model.model_version();
   model->ir_version_ = fbs_model.ir_version();
 #endif
 
   std::unordered_map<std::string, int> domain_to_version;
-  auto fbs_op_set_ids = fbs_model.opset_import();
-  ORT_RETURN_IF(nullptr == fbs_op_set_ids, "Model must have opset imports. Invalid ORT format model.");
-
-  for (const auto* entry : *fbs_op_set_ids) {
-    const auto* fbs_domain = entry->domain();
-    ORT_RETURN_IF(nullptr == fbs_domain, "opset import domain is null. Invalid ORT format model.");
-
-    std::string domain = fbs_domain->str();
-
-    // perform same aliasing that we do when loading an ONNX format model
-    if (domain == kOnnxDomainAlias) {
-      domain_to_version[kOnnxDomain] = gsl::narrow_cast<int>(entry->version());
-    } else {
-      domain_to_version[domain] = gsl::narrow_cast<int>(entry->version());
-    }
-  }
+  ORT_RETURN_IF_ERROR(experimental::utils::LoadOpsetImportOrtFormat(fbs_model.opset_import(), domain_to_version));
 
   auto fbs_graph = fbs_model.graph();
   ORT_RETURN_IF(nullptr == fbs_graph, "Graph is null. Invalid ORT format model.");
@@ -629,5 +652,6 @@ common::Status Model::LoadFromOrtFormat(const fbs::Model& fbs_model,
 
   return Status::OK();
 }
+#endif
 
 }  // namespace onnxruntime

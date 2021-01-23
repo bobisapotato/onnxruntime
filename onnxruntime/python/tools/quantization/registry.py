@@ -4,28 +4,36 @@ from .operators.matmul import MatMulInteger, QLinearMatMul
 from .operators.attention import AttentionQuant
 from .operators.embed_layernorm import EmbedLayerNormalizationQuant
 from .operators.gather import GatherQuant
-from .operators.conv import QLinearCov, ConInteger
+from .operators.conv import QLinearConv, ConvInteger
 from .operators.activation import QLinearActivation
 from .operators.binary_op import QLinearBinaryOp
 from .operators.maxpool import QMaxPool
+from .operators.gavgpool import QGlobalAveragePool
+from .operators.lstm import LSTMQuant
+from .operators.split import QSplit
 
 CommonOpsRegistry = {"Gather": GatherQuant, "EmbedLayerNormalization": EmbedLayerNormalizationQuant}
 
 IntegerOpsRegistry = {
-    "Conv": ConInteger,
+    "Conv": ConvInteger,
     "MatMul": MatMulInteger,
     "Attention": AttentionQuant,
+    "LSTM": LSTMQuant,
 }
 IntegerOpsRegistry.update(CommonOpsRegistry)
 
 QLinearOpsRegistry = {
-    "Conv": QLinearCov,
+    "Conv": QLinearConv,
     "MatMul": QLinearMatMul,
     "Add": QLinearBinaryOp,
     "Mul": QLinearBinaryOp,
     "Relu": QLinearActivation,
     "Clip": QLinearActivation,
+    "LeakyRelu": QLinearActivation,
+    "Sigmoid": QLinearActivation,
     "MaxPool": QMaxPool,
+    "GlobalAveragePool": QGlobalAveragePool,
+    "Split": QSplit,
 }
 QLinearOpsRegistry.update(CommonOpsRegistry)
 

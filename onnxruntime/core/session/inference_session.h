@@ -39,7 +39,7 @@ class ModelProto;
 
 struct OrtCustomOpDomain {
   std::string domain_;
-  std::vector<OrtCustomOp*> custom_ops_;
+  std::vector<const OrtCustomOp*> custom_ops_;
 };
 
 namespace onnxruntime {
@@ -57,9 +57,7 @@ class LoggingManager;
   */
 struct ModelMetadata {
   ModelMetadata() = default;
-  ModelMetadata(const ModelMetadata& other)
-      : producer_name(other.producer_name), graph_name(other.graph_name), domain(other.domain), description(other.description), version(other.version), custom_metadata_map(other.custom_metadata_map) {
-  }
+  ModelMetadata(const ModelMetadata&) = default;
   ~ModelMetadata() = default;
   ModelMetadata& operator=(const ModelMetadata&) = delete;
 
@@ -67,6 +65,7 @@ struct ModelMetadata {
   std::string graph_name;
   std::string domain;
   std::string description;
+  std::string graph_description;
   int64_t version = 0;
   std::unordered_map<std::string, std::string> custom_metadata_map;
 };
@@ -372,6 +371,11 @@ class InferenceSession {
     @return the name of the profile file.
     */
   std::string EndProfiling();
+  /**
+    * Return the profiler to access its attributes
+    @return the profiler object
+    */
+  const profiling::Profiler& GetProfiling() const;
 
   /**
     * Search registered execution providers for an allocator that has characteristics
@@ -465,6 +469,7 @@ class InferenceSession {
   common::Status SaveToOrtFormat(const std::basic_string<ORTCHAR_T>& filepath) const;
 #endif
 
+#if defined(ENABLE_ORT_FORMAT_LOAD)
   /**
     * Load an ORT format model.
     * @param model_uri absolute path of the model file.
@@ -486,6 +491,8 @@ class InferenceSession {
   common::Status LoadOrtModel(const void* model_data, int model_data_len) ORT_MUST_USE_RESULT;
 
   common::Status LoadOrtModel(std::function<Status()> load_ort_format_model_bytes) ORT_MUST_USE_RESULT;
+
+#endif  // defined(ENABLE_ORT_FORMAT_LOAD)
 
   // Create a Logger for a single execution if possible. Otherwise use the default logger.
   // If a new logger is created, it will also be stored in new_run_logger,
@@ -523,7 +530,8 @@ class InferenceSession {
                                 const onnxruntime::GraphTransformerManager& graph_transformer_mgr,
                                 const ExecutionProviders& providers, KernelRegistryManager& kernel_registry_manager,
                                 const InsertCastTransformer& insert_cast_transformer,
-                                SessionState& session_state) ORT_MUST_USE_RESULT;
+                                SessionState& session_state,
+                                bool saving_model_in_ort_format) ORT_MUST_USE_RESULT;
 
   onnxruntime::GraphTransformerManager graph_transformation_mgr_;
 
@@ -533,6 +541,11 @@ class InferenceSession {
   // will be run regardless of the level set.
   // .i.e This list overrides both SessionOptions.graph_optimization_level and predefined transformers.
   std::vector<std::string> transformers_to_enable_;
+#endif
+
+#if !defined(ORT_MINIMAL_BUILD) || defined(ORT_EXTENDED_MINIMAL_BUILD)
+  Status PartitionOrtFormatModel(onnxruntime::Graph& graph, const ExecutionProviders& providers,
+                                 KernelRegistryManager& kernel_registry_manager, SessionState& session_state) const;
 #endif
 
   SessionOptions session_options_;
@@ -615,7 +628,7 @@ class InferenceSession {
 
     TimePoint time_sent_last_;  // the TimePoint of the last report
     // Event Rate per provider < 20 peak events per second
-    constexpr static long long kDurationBetweenSending = 1000 * 1000 * 60 * 10;     // duration in (us).  send a report every 10 mins
+    constexpr static long long kDurationBetweenSending = 1000 * 1000 * 60 * 10;  // duration in (us).  send a report every 10 mins
   } telemetry_;
 
 #ifdef ONNXRUNTIME_ENABLE_INSTRUMENT
